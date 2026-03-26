@@ -3,12 +3,31 @@ import type { ChatResponse, GraphData, NodeDetail, SearchResult } from "./types"
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, options);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const res = await fetch(`${API_BASE}${url}`, {
+      ...options,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        res.status === 429
+          ? "Rate limit exceeded — please wait a moment and try again."
+          : `API error ${res.status}: ${text || res.statusText}`
+      );
+    }
+    return res.json();
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Request timed out. The server may be busy — try again.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res.json();
 }
 
 export async function getGraph(summary = true): Promise<GraphData> {

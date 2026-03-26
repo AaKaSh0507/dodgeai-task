@@ -66,7 +66,7 @@ User question → Guardrails check → Gemini (NL→SQL) → SQL validation
 | **Backend** | Python + FastAPI | Async-native, fast to build, excellent LLM ecosystem |
 | **Database** | SQLite | Zero-config, embeddable, free to deploy, standard SQL that LLMs generate well |
 | **Graph Engine** | NetworkX | In-memory directed graph for traversal + visualization serialization |
-| **LLM** | Google Gemini 2.0 Flash | Free tier, fast inference, strong SQL generation |
+| **LLM** | Google Gemini 2.5 Flash | Free tier, fast inference, strong SQL generation |
 | **Frontend** | React + Vite + TypeScript | Type safety, fast HMR, modern tooling |
 | **Graph Viz** | react-force-graph-2d | Canvas-based, handles 1000+ nodes, built-in interactions |
 | **Styling** | Tailwind CSS v4 | Utility-first, rapid UI development |
@@ -249,7 +249,13 @@ npm run dev               # Start dev server on :5173 (proxies /api to :8000)
 │   ├── llm.py             # Gemini integration, NL↔SQL
 │   ├── guardrails.py      # Off-topic + SQL safety checks
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── tests/             # 76 automated tests
+│       ├── test_api.py        # 20 endpoint tests
+│       ├── test_database.py   # 7 DB tests
+│       ├── test_graph.py      # 14 graph tests
+│       ├── test_guardrails.py # 12 guardrail tests
+│       └── test_llm.py        # 13 LLM parsing tests
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx              # Main layout
@@ -280,3 +286,83 @@ npm run dev               # Start dev server on :5173 (proxies /api to :8000)
 | GET | `/api/schema` | Full DB schema |
 | POST | `/api/chat` | NL chat → SQL → answer |
 | POST | `/api/chat/stream` | SSE streaming version |
+
+---
+
+## Testing
+
+**76 automated tests** covering all layers:
+
+```bash
+cd backend && python -m pytest tests/ -v --tb=short
+```
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_api.py` | 20 | All endpoints, input validation, SQL injection, streaming, rate limits |
+| `test_graph.py` | 14 | Graph building, JSON serialization, node queries, search |
+| `test_llm.py` | 13 | Response parsing, result formatting, entity extraction |
+| `test_guardrails.py` | 12 | Off-topic detection, SQL validation, DDL/DML rejection |
+| `test_database.py` | 7 | Schema, table info, query execution, safety caps, row limits |
+
+---
+
+## Production Hardening
+
+### Backend
+- **Structured logging** via Python `logging` module across all modules
+- **Rate limiting** — in-memory per-IP, 30 requests/min (configurable via `RATE_LIMIT_PER_MIN`)
+- **Request timeouts** — chat endpoint capped at 60s (configurable via `CHAT_TIMEOUT_SEC`)
+- **Global error handler** — catches unhandled exceptions, returns 500 with safe message
+- **Input validation** — Pydantic `field_validator` strips whitespace, rejects empty messages, caps at 2000 chars
+- **CORS** — env-based origins via `CORS_ORIGINS` (comma-separated)
+
+### LLM Reliability
+- **Low temperature** (0.1) for deterministic SQL generation
+- **Retry logic** — 2 retries with exponential backoff for 429/503/500 errors
+- **Structured generation config** with `max_output_tokens=4096`
+- **Off-topic pre-filter** — regex patterns reject obviously irrelevant queries before hitting the LLM
+
+### Database Safety
+- **Read-only connections** — SQLite opened with `?mode=ro`
+- **Row cap** — `MAX_ROWS=500` per query using `fetchmany()` to prevent memory blowouts
+- **SQL validation** — rejects DDL/DML, multi-statement, and injection attempts
+
+### Frontend
+- **Request timeouts** — 30s via AbortController
+- **Rate limit handling** — 429 responses display retry message
+- **Error state** — retry button when graph fails to load
+- **Abort cleanup** — pending requests cancelled on component unmount
+
+---
+
+## Deployment
+
+### Render (Backend)
+
+Configuration provided in `render.yaml`:
+
+```bash
+# Push to GitHub, then connect repo on Render
+# Set GEMINI_API_KEY in Render Environment
+```
+
+### Vercel (Frontend)
+
+Configuration provided in `vercel.json`:
+
+```bash
+# Connect frontend/ directory on Vercel
+# Set VITE_API_URL to your Render backend URL
+```
+
+### Environment Variables
+
+| Variable | Where | Default | Description |
+|----------|-------|---------|-------------|
+| `GEMINI_API_KEY` | Backend | _required_ | Google Gemini API key |
+| `CORS_ORIGINS` | Backend | `*` | Allowed CORS origins (comma-separated) |
+| `RATE_LIMIT_PER_MIN` | Backend | `30` | Max requests per IP per minute |
+| `CHAT_TIMEOUT_SEC` | Backend | `60` | Max seconds for chat response |
+| `PORT` | Backend | `8000` | Server port (Render sets this) |
+| `VITE_API_URL` | Frontend | _(empty)_ | Backend URL for production builds |

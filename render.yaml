@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: o2c-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATA_DIR
+        value: /app/sap-o2c-data
+      - key: DB_PATH
+        value: /app/data/o2c.db
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: PORT
+        value: "8000"
+    healthCheckPath: /api/health
+    disk:
+      name: o2c-data
+      mountPath: /app/data
+      sizeGB: 1

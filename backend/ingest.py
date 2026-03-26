@@ -5,7 +5,6 @@ Data ingestion script: reads JSONL files from sap-o2c-data/ and loads into SQLit
 import json
 import os
 import sqlite3
-import os
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parent.parent / "sap-o2c-data"))

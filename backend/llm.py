@@ -3,16 +3,30 @@ LLM integration using Google Gemini for NL-to-SQL translation and response gener
 """
 
 import json
+import logging
 import os
 import re
+import time
+
 import google.generativeai as genai
 from database import get_schema, execute_readonly_query
 from guardrails import check_off_topic, validate_sql, REJECTION_MESSAGE
 
-# Configure Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
+logger = logging.getLogger("o2c.llm")
 
-model = genai.GenerativeModel("gemini-2.0-flash")
+# Configure Gemini
+_api_key = os.getenv("GEMINI_API_KEY", "")
+if not _api_key:
+    logger.warning("GEMINI_API_KEY not set — LLM calls will fail")
+genai.configure(api_key=_api_key)
+
+model = genai.GenerativeModel(
+    "gemini-2.5-flash",
+    generation_config=genai.GenerationConfig(
+        temperature=0.1,       # low temperature for deterministic SQL
+        max_output_tokens=4096,
+    ),
+)
 
 SYSTEM_PROMPT = """You are a data analyst assistant for an SAP Order-to-Cash (O2C) system. 
 You help users query and understand business data about sales orders, deliveries, billing documents, 
@@ -80,8 +94,13 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
     """
     # Quick off-topic check
     if check_off_topic(message):
-        # Still let the LLM make the final call, but flag it
-        pass
+        logger.info("Off-topic detected by regex: %s", message[:100])
+        return {
+            "answer": REJECTION_MESSAGE,
+            "sql_query": None,
+            "referenced_nodes": [],
+            "is_off_topic": True,
+        }
 
     system_prompt = get_system_prompt()
 
@@ -99,14 +118,16 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
     contents.append({"role": "user", "parts": [{"text": message}]})
 
     try:
-        # Pass 1: Generate SQL
-        response = model.generate_content(contents)
-        llm_text = response.text.strip()
+        # Pass 1: Generate SQL (with retry)
+        llm_text = await _call_llm(contents)
+        logger.info("LLM Pass-1 response length: %d chars", len(llm_text))
+        logger.debug("LLM Pass-1 raw: %s", llm_text[:500])
 
         # Parse LLM response
         parsed = _parse_llm_response(llm_text)
 
         if not parsed["is_relevant"]:
+            logger.info("LLM flagged as off-topic")
             return {
                 "answer": REJECTION_MESSAGE,
                 "sql_query": None,
@@ -129,6 +150,7 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
         # Validate SQL
         is_valid, error = validate_sql(sql_query)
         if not is_valid:
+            logger.warning("SQL validation failed: %s | SQL: %s", error, sql_query)
             return {
                 "answer": f"I generated a query but it didn't pass safety checks: {error}. Please try rephrasing your question.",
                 "sql_query": sql_query,
@@ -136,11 +158,14 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
                 "is_off_topic": False,
             }
 
+        logger.info("Executing SQL: %s", sql_query[:200])
+
         # Execute SQL
         try:
             columns, rows = execute_readonly_query(sql_query)
+            logger.info("Query returned %d rows, %d columns", len(rows), len(columns))
         except Exception as e:
-            # If query fails, try to get LLM to fix it
+            logger.warning("SQL execution error: %s | SQL: %s", e, sql_query)
             return {
                 "answer": f"The query encountered an error: {str(e)}. Let me know if you'd like to try a different approach.",
                 "sql_query": sql_query,
@@ -161,10 +186,10 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
                 f"Please provide a clear, concise natural language answer based on these results. "
                 f"Include specific numbers and values from the data. Format nicely with markdown if helpful."
             )
-            summary_response = model.generate_content(summary_prompt)
-            answer = summary_response.text.strip()
+            summary_text = await _call_llm(summary_prompt)
+            answer = summary_text
+            logger.info("LLM Pass-2 summary length: %d chars", len(answer))
         else:
-            # Too many rows, summarize first few
             result_text = _format_results(columns, rows[:20])
             answer = (
                 f"{explanation}\n\n"
@@ -183,12 +208,31 @@ async def chat(message: str, history: list[dict] | None = None) -> dict:
         }
 
     except Exception as e:
+        logger.exception("Chat processing error")
         return {
             "answer": f"An error occurred while processing your question: {str(e)}",
             "sql_query": None,
             "referenced_nodes": [],
             "is_off_topic": False,
         }
+
+
+MAX_RETRIES = 2
+
+async def _call_llm(contents, retries: int = MAX_RETRIES) -> str:
+    """Call Gemini with retry logic for transient errors."""
+    for attempt in range(retries + 1):
+        try:
+            response = model.generate_content(contents)
+            return response.text.strip()
+        except Exception as e:
+            err_str = str(e)
+            if attempt < retries and ("429" in err_str or "503" in err_str or "500" in err_str):
+                wait = 2 ** attempt
+                logger.warning("LLM call attempt %d failed (%s), retrying in %ds", attempt + 1, err_str[:80], wait)
+                time.sleep(wait)
+            else:
+                raise
 
 
 def _parse_llm_response(text: str) -> dict:

@@ -12,7 +12,10 @@ COPY . .
 # Ensure data directory exists
 RUN mkdir -p /app/data
 
-# Run ingestion at build time if data dir is mounted, otherwise at startup
 EXPOSE 8000
 
-CMD ["sh", "-c", "python ingest.py && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
+# health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=40s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+
+CMD ["sh", "-c", "python ingest.py && python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

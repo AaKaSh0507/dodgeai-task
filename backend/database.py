@@ -2,11 +2,16 @@
 SQLite database connection management.
 """
 
+import logging
 import os
 import sqlite3
 from pathlib import Path
 
+logger = logging.getLogger("o2c.db")
+
 DB_PATH = Path(os.environ.get("DB_PATH", Path(__file__).resolve().parent / "data" / "o2c.db"))
+
+MAX_ROWS = 500  # Safety cap on returned rows
 
 
 def get_connection(readonly: bool = True) -> sqlite3.Connection:
@@ -50,7 +55,6 @@ def execute_readonly_query(sql: str) -> tuple[list[str], list[list]]:
     forbidden = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH"]
     sql_upper = sql.upper().strip()
     for keyword in forbidden:
-        # Check if keyword appears as a statement start or after semicolon
         if sql_upper.startswith(keyword) or f"; {keyword}" in sql_upper.replace("\n", " "):
             raise ValueError(f"Forbidden SQL operation: {keyword}")
 
@@ -58,7 +62,11 @@ def execute_readonly_query(sql: str) -> tuple[list[str], list[list]]:
     try:
         cursor = conn.execute(sql)
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
-        rows = [list(row) for row in cursor.fetchall()]
+        rows = [list(row) for row in cursor.fetchmany(MAX_ROWS)]
+        logger.info("Executed query (%d cols, %d rows): %s", len(columns), len(rows), sql[:120])
         return columns, rows
+    except Exception as e:
+        logger.warning("Query failed: %s | %s", e, sql[:200])
+        raise
     finally:
         conn.close()

@@ -10,6 +10,7 @@ import { NODE_COLORS, NODE_TYPE_LABELS } from "./types";
 function App() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetailType | null>(null);
   const [highlightNodes, setHighlightNodes] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
@@ -22,7 +23,10 @@ function App() {
   useEffect(() => {
     getGraph(true)
       .then(setGraphData)
-      .catch(console.error)
+      .catch((err) => {
+        console.error(err);
+        setError("Failed to load graph data. Is the backend running?");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -161,6 +165,23 @@ function App() {
               <div className="flex items-center justify-center h-full">
                 <Loader2 size={32} className="animate-spin text-blue-400" />
                 <span className="ml-3 text-slate-400">Loading graph...</span>
+              </div>
+            ) : error ? (
+              <div className="flex flex-col items-center justify-center h-full gap-3">
+                <span className="text-red-400 text-sm">{error}</span>
+                <button
+                  onClick={() => {
+                    setError(null);
+                    setLoading(true);
+                    getGraph(true)
+                      .then(setGraphData)
+                      .catch((err) => setError(String(err)))
+                      .finally(() => setLoading(false));
+                  }}
+                  className="px-3 py-1 bg-slate-700 text-slate-200 rounded text-sm hover:bg-slate-600"
+                >
+                  Retry
+                </button>
               </div>
             ) : (
               <GraphView
