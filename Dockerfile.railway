@@ -1,0 +1,24 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy backend source code
+COPY backend/ .
+
+# Copy dataset into the image so SQLite can be rebuilt on each deploy
+COPY sap-o2c-data/ /app/sap-o2c-data/
+
+# Ensure data directory exists for SQLite
+RUN mkdir -p /app/data
+
+ENV DATA_DIR=/app/sap-o2c-data
+ENV DB_PATH=/app/data/o2c.db
+
+EXPOSE 8000
+
+# Ingest JSONL → SQLite on startup, then serve
+CMD ["sh", "-c", "python ingest.py && python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
