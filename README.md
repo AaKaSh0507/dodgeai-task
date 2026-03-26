@@ -6,7 +6,7 @@ A graph-based data exploration and LLM-powered query system for SAP Order-to-Cas
 
 ## Live Demo
 
-> **[https://your-demo-url.vercel.app](https://your-demo-url.vercel.app)** _(update after deployment)_
+> **[https://dodgeai-task.vercel.app/](https://dodgeai-task.vercel.app/)** _(update after deployment)_
 
 ---
 
